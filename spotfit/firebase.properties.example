@@ -1,0 +1,5 @@
+# Copy this file as firebase.properties for local development.
+# Do not put service-account JSON or private keys in this file.
+
+firebase.api.key=AIzaSyDoelYVlu81T4Jo2qdft5IkflrVw4Mwql0
+firebase.project.id=spotfit-fb3b6

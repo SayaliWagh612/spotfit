@@ -1,0 +1,836 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function signedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function managerDocument() {
+      return get(/databases/$(database)/documents/managers/$(request.auth.uid));
+    }
+
+    function isActiveManager() {
+      return signedIn()
+          && exists(/databases/$(database)/documents/managers/$(request.auth.uid))
+          && managerDocument().data.active == true
+          && managerDocument().data.role == "MANAGER";
+    }
+
+    function isAssignedManager(targetSpaceId) {
+      return isActiveManager()
+          && targetSpaceId in managerDocument().data.assignedSpaceIds;
+    }
+
+    function managerHasPermission(permission) {
+      return isActiveManager()
+          && permission in managerDocument().data.permissions;
+    }
+
+    function isActiveCustomer() {
+      return signedIn()
+          && request.auth.token.email_verified == true
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userId == request.auth.uid
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "USER"
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.emailVerified == true;
+    }
+
+    function isCustomerVisibleSpace() {
+      return isActiveCustomer()
+          && resource.data.schemaVersion == 2
+          && resource.data.approvalStatus == "APPROVED"
+          && resource.data.operationalStatus == "ACTIVE"
+          && resource.data.active == true
+          && resource.data.category == "CREATIVITY"
+          && resource.data.businessId is string
+          && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.schemaVersion == 2
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.verificationStatus == "APPROVED"
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.active == true;
+    }
+
+    function isCustomerVisibleSpaceForList() {
+      return isActiveCustomer()
+          && resource.data.schemaVersion == 2
+          && resource.data.approvalStatus == "APPROVED"
+          && resource.data.operationalStatus == "ACTIVE"
+          && resource.data.active == true
+          && resource.data.category == "CREATIVITY"
+          && resource.data.parentBusinessMarketplaceEligible == true;
+    }
+
+    function isCustomerVisibleSpaceId(targetSpaceId) {
+      return isActiveCustomer()
+          && exists(/databases/$(database)/documents/spaces/$(targetSpaceId))
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.schemaVersion == 2
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.approvalStatus == "APPROVED"
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.operationalStatus == "ACTIVE"
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.active == true
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.category == "CREATIVITY"
+          && get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.businessId is string
+          && exists(/databases/$(database)/documents/businesses/$(get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.businessId)).data.schemaVersion == 2
+          && get(/databases/$(database)/documents/businesses/$(get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.businessId)).data.verificationStatus == "APPROVED"
+          && get(/databases/$(database)/documents/businesses/$(get(/databases/$(database)/documents/spaces/$(targetSpaceId)).data.businessId)).data.active == true;
+    }
+
+    function isPublicMarketplaceSpace() {
+        return resource.data.schemaVersion == 2
+            && resource.data.category == "CREATIVITY"
+            && resource.data.approvalStatus == "APPROVED"
+            && resource.data.operationalStatus == "ACTIVE"
+            && resource.data.active == true
+            && resource.data.parentBusinessMarketplaceEligible == true;
+    }
+
+    function isPublicMarketplaceSpaceForParent() {
+        let p = get(/databases/$(database)/documents/spaces/$(spaceId));
+        return p.data.schemaVersion == 2
+            && p.data.category == "CREATIVITY"
+            && p.data.approvalStatus == "APPROVED"
+            && p.data.operationalStatus == "ACTIVE"
+            && p.data.active == true
+            && p.data.parentBusinessMarketplaceEligible == true;
+    }
+
+
+    // Customer User Collection Security Rules
+    match /users/{userId} {
+      allow get: if request.auth != null && request.auth.uid == userId;
+      allow list: if false;
+
+      allow create: if signedIn()
+                    && request.auth.uid == userId
+                    && request.resource.data.userId == userId
+                    && request.resource.data.role == "USER"
+                    && request.resource.data.active == true
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.emailVerified == request.auth.token.email_verified;
+
+      allow update: if signedIn()
+                    && request.auth.uid == userId
+                    && request.resource.data.userId == resource.data.userId
+                    && request.resource.data.role == resource.data.role
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.active == resource.data.active
+                    && request.resource.data.email == resource.data.email
+                    && request.resource.data.emailVerified == request.auth.token.email_verified;
+
+      allow delete: if false;
+
+      // Customer Favorites Nested Collection Security Rules
+      match /favorites/{spaceId} {
+        allow get, list: if isActiveCustomer()
+                         && request.auth.uid == userId;
+
+        allow create: if isActiveCustomer()
+                      && request.auth.uid == userId
+                      && request.resource.data.keys()
+                           .hasOnly(['userId', 'spaceId', 'createdAt'])
+                      && request.resource.data.userId == userId
+                      && request.resource.data.spaceId == spaceId
+                      && request.resource.data.createdAt is int
+                      && isCustomerVisibleSpaceId(spaceId);
+
+        allow update: if false;
+
+        allow delete: if isActiveCustomer()
+                      && request.auth.uid == userId;
+      }
+    }
+
+    // Owner Collection Security Rules
+    match /owners/{ownerId} {
+      allow get: if request.auth != null && request.auth.uid == ownerId;
+      allow list: if false;
+
+      allow create: if signedIn()
+                    && request.auth.uid == ownerId
+                    && request.resource.data.ownerId == ownerId
+                    && request.resource.data.role == "OWNER"
+                    && request.resource.data.active == true
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.emailVerified == request.auth.token.email_verified;
+
+      allow update: if signedIn()
+                    && request.auth.uid == ownerId
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.role == resource.data.role
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.active == resource.data.active
+                    && request.resource.data.email == resource.data.email
+                    && request.resource.data.emailVerified == request.auth.token.email_verified;
+
+      allow delete: if false;
+    }
+
+    // Manager Collection Security Rules (/managers/{managerId})
+    match /managers/{managerId} {
+      allow get: if signedIn() && (request.auth.uid == managerId || resource.data.ownerId == request.auth.uid);
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+                    && request.auth.uid == managerId
+                    && request.resource.data.managerId == managerId
+                    && request.resource.data.role == "MANAGER"
+                    && request.resource.data.active == true
+                    && request.resource.data.email == request.auth.token.email
+                    && request.resource.data.emailVerified == request.auth.token.email_verified;
+
+      allow update: if signedIn() && (
+        // 1. Owner updates assignments/permissions/active status
+        (resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId) ||
+        // 2. Manager updates personal profile fields only
+        (request.auth.uid == managerId
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.assignedSpaceIds == resource.data.assignedSpaceIds
+         && request.resource.data.permissions == resource.data.permissions
+         && request.resource.data.active == resource.data.active
+         && request.resource.data.role == resource.data.role)
+      );
+
+      allow delete: if false;
+    }
+
+    match /managerInvitations/{code} {
+      allow get: if (
+        request.auth != null
+        && (
+          resource.data.ownerId == request.auth.uid
+          || request.auth.token.email == resource.data.managerEmail
+        )
+      ) || (
+        request.auth == null
+        && resource.data.status == "PENDING"
+        && resource.data.active == true
+        && resource.data.expiresAt > request.time.toMillis()
+      );
+
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+                    && request.resource.data.ownerId == request.auth.uid
+                    && request.resource.data.status == "PENDING";
+
+      allow update: if signedIn() && (
+        // 1. Owner revokes invitation
+        (resource.data.ownerId == request.auth.uid && request.resource.data.status == "REVOKED") ||
+        // 2. Manager accepts invitation atomically
+        (request.auth.token.email == resource.data.managerEmail
+         && resource.data.status == "PENDING"
+         && request.resource.data.status == "ACCEPTED"
+         && request.resource.data.acceptedByManagerId == request.auth.uid
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.assignedSpaceIds == resource.data.assignedSpaceIds
+         && request.resource.data.permissions == resource.data.permissions)
+      );
+
+      allow delete: if false;
+    }
+
+    // Business Collection Security Rules
+    match /businesses/{businessId} {
+      allow get: if (signedIn() && resource.data.ownerId == request.auth.uid)
+                 || (isActiveCustomer() && resource.data.verificationStatus == "APPROVED" && resource.data.active == true);
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+                    && request.resource.data.ownerId == request.auth.uid
+                    && request.resource.data.verificationStatus == "DRAFT"
+                    && request.resource.data.active == true
+                    && (
+                      (!('schemaVersion' in request.resource.data) || request.resource.data.schemaVersion == 1) ||
+                      (request.resource.data.schemaVersion == 2
+                       && request.resource.data.businessId == businessId
+                       && request.resource.data.category == "CREATIVITY"
+                       && request.resource.data.activityGroups is list
+                       && request.resource.data.activityGroups.size() > 0
+                       && request.resource.data.submittedAt == 0
+                       && request.resource.data.reviewedAt == 0
+                       && request.resource.data.rejectionReason == ""
+                       && request.resource.data.createdAt > 0
+                       && request.resource.data.updatedAt >= request.resource.data.createdAt
+                       && request.resource.data.logoUrl == "")
+                    );
+
+      allow update: if signedIn()
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.businessId == resource.data.businessId
+                    && request.resource.data.active == resource.data.active
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && (
+                      // V2 Document Update Rules
+                      (resource.data.schemaVersion == 2
+                       && request.resource.data.schemaVersion == 2
+                       && request.resource.data.updatedAt >= resource.data.updatedAt
+                       && (
+                         // 1. Edit in DRAFT
+                         (resource.data.verificationStatus == "DRAFT" && request.resource.data.verificationStatus == "DRAFT") ||
+                         // 2. Edit in REJECTED (Resets status to DRAFT for resubmission)
+                         (resource.data.verificationStatus == "REJECTED" && request.resource.data.verificationStatus == "DRAFT"
+                          && request.resource.data.reviewedAt == 0
+                          && request.resource.data.rejectionReason == "") ||
+                         // 3. Submit Business (DRAFT or REJECTED -> SUBMITTED)
+                         ((request.resource.data.verificationStatus == "SUBMITTED" || request.resource.data.status == "SUBMITTED")
+                          && resource.data.verificationStatus in ["DRAFT", "REJECTED"]
+                          && request.resource.data.submittedAt > 0
+                          && request.resource.data.reviewedAt == 0
+                          && request.resource.data.rejectionReason == "")
+                       )
+                      ) ||
+                      // V1 Document Update Rules (Backward Compatible)
+                      ((!('schemaVersion' in resource.data) || resource.data.schemaVersion == 1)
+                       && (
+                         (resource.data.verificationStatus == "DRAFT" && request.resource.data.verificationStatus == "DRAFT") ||
+                         (resource.data.verificationStatus == "REJECTED" && request.resource.data.verificationStatus == "REJECTED"
+                          && request.resource.data.reviewedAt == resource.data.reviewedAt
+                          && request.resource.data.rejectionReason == resource.data.rejectionReason) ||
+                         ((request.resource.data.verificationStatus == "SUBMITTED" || request.resource.data.status == "SUBMITTED")
+                          && resource.data.verificationStatus in ["DRAFT", "REJECTED"]
+                          && request.resource.data.submittedAt > 0
+                          && request.resource.data.reviewedAt == 0
+                          && request.resource.data.rejectionReason == "")
+                       )
+                      )
+                    );
+
+      allow delete: if false;
+    }
+
+    // Space Collection Security Rules
+    match /spaces/{spaceId} {
+      allow get, list: if isPublicMarketplaceSpace();
+
+      allow get: if (signedIn() && (resource.data.ownerId == request.auth.uid || isAssignedManager(spaceId)))
+                    || isCustomerVisibleSpace();
+      
+      allow list: if (signedIn() && (resource.data.ownerId == request.auth.uid || isAssignedManager(spaceId)))
+                    || isCustomerVisibleSpaceForList();
+
+      allow create: if signedIn()
+                    && request.resource.data.spaceId == spaceId
+                    && request.resource.data.ownerId == request.auth.uid
+                    && request.resource.data.active == true
+                    && exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+                    && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId == request.auth.uid
+                    && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.active == true
+                    && (
+                      // V2 Space Creation Rules
+                      (request.resource.data.schemaVersion == 2
+                       && request.resource.data.approvalStatus == "DRAFT"
+                       && request.resource.data.operationalStatus == "INACTIVE"
+                       && request.resource.data.bookingType in ["SEAT", "SLOT", "WORKSHOP", "RENTAL", "VENUE", "PRACTICE_ROOM"]
+                       && request.resource.data.pricingUnit in ["HOUR", "DAY", "PERSON", "SESSION", "EVENT", "SEAT", "FLAT"]
+                       && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.verificationStatus == "APPROVED"
+                       && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.category == "CREATIVITY"
+                       && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.schemaVersion == 2
+                       && request.resource.data.parentBusinessMarketplaceEligible == false
+                      ) ||
+                      // V1 Space Creation Rules (Backward Compatible)
+                      ((!('schemaVersion' in request.resource.data) || request.resource.data.schemaVersion == 1)
+                       && request.resource.data.status == "DRAFT"
+                      )
+                    );
+
+      allow update: if signedIn() && (
+        // 1. Owner updates V2 Space
+        (resource.data.schemaVersion == 2
+         && request.resource.data.schemaVersion == 2
+         && resource.data.ownerId == request.auth.uid
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.spaceId == resource.data.spaceId
+         && request.resource.data.businessId == resource.data.businessId
+         && request.resource.data.createdAt == resource.data.createdAt
+         && request.resource.data.active == resource.data.active
+         && request.resource.data.pricingUnit in ["HOUR", "DAY", "PERSON", "SESSION", "EVENT", "SEAT", "FLAT"]
+         && request.resource.data.get('parentBusinessMarketplaceEligible', false) == resource.data.get('parentBusinessMarketplaceEligible', false)
+         && (
+           // Edit in DRAFT
+           (resource.data.approvalStatus == "DRAFT" && request.resource.data.approvalStatus == "DRAFT" && request.resource.data.operationalStatus == "INACTIVE") ||
+           // Edit in REJECTED (Resets status to DRAFT / INACTIVE)
+           (resource.data.approvalStatus == "REJECTED" && request.resource.data.approvalStatus == "DRAFT" && request.resource.data.operationalStatus == "INACTIVE") ||
+           // Edit in APPROVED (Resets status to DRAFT / INACTIVE)
+           (resource.data.approvalStatus == "APPROVED" && request.resource.data.approvalStatus == "DRAFT" && request.resource.data.operationalStatus == "INACTIVE") ||
+           // Submit V2 Space (DRAFT/REJECTED -> SUBMITTED)
+           (request.resource.data.approvalStatus == "SUBMITTED"
+            && resource.data.approvalStatus in ["DRAFT", "REJECTED"]
+            && request.resource.data.submittedAt > 0
+            && request.resource.data.operationalStatus == "INACTIVE"
+            && request.resource.data.reviewedAt == 0
+            && request.resource.data.rejectionReason == ""
+            && request.resource.data.approvedAt == 0
+            && request.resource.data.publishedAt == 0) ||
+           // Owner updates Operational Status for APPROVED spaces (APPROVED + INACTIVE -> APPROVED + ACTIVE, or transitions among ACTIVE, INACTIVE, MAINTENANCE, CLOSED)
+           (resource.data.approvalStatus == "APPROVED"
+            && request.resource.data.approvalStatus == "APPROVED"
+            && request.resource.data.reviewedAt == resource.data.reviewedAt
+            && request.resource.data.approvedAt == resource.data.approvedAt
+            && request.resource.data.rejectionReason == resource.data.rejectionReason
+            && request.resource.data.submittedAt == resource.data.submittedAt
+            && request.resource.data.operationalStatus in ["ACTIVE", "INACTIVE", "MAINTENANCE", "CLOSED"]
+            && (resource.data.publishedAt == 0 ? request.resource.data.publishedAt > 0 : request.resource.data.publishedAt == resource.data.publishedAt)
+            && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.verificationStatus == "APPROVED"
+            && request.resource.data.parentBusinessMarketplaceEligible == resource.data.parentBusinessMarketplaceEligible
+            && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.active == true
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["operationalStatus", "publishedAt", "updatedAt"]))
+         )
+        ) ||
+        // 2. Owner updates V1 Space
+        ((!('schemaVersion' in resource.data) || resource.data.schemaVersion == 1)
+         && resource.data.ownerId == request.auth.uid
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.spaceId == resource.data.spaceId
+         && request.resource.data.createdAt == resource.data.createdAt
+         && request.resource.data.active == resource.data.active) ||
+        // 3. Manager with EDIT_SPACE_OPERATIONS updates operational fields only (V1)
+        (isAssignedManager(spaceId)
+         && managerHasPermission("EDIT_SPACE_OPERATIONS")
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.spaceId == resource.data.spaceId
+         && request.resource.data.businessId == resource.data.businessId
+         && request.resource.data.status == resource.data.status
+         && request.resource.data.createdAt == resource.data.createdAt
+         && request.resource.data.active == resource.data.active
+         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "operatingDays", "openingTime", "closingTime", "amenities", "suitableActivities", "rules", "updatedAt"
+         ])) ||
+        // 4. Manager with MANAGE_SPACE_STATUS updates V2 Space operationalStatus
+        (isAssignedManager(spaceId)
+         && managerHasPermission("MANAGE_SPACE_STATUS")
+         && resource.data.schemaVersion == 2
+         && request.resource.data.schemaVersion == 2
+         && resource.data.approvalStatus == "APPROVED"
+         && request.resource.data.approvalStatus == "APPROVED"
+         && request.resource.data.ownerId == resource.data.ownerId
+         && request.resource.data.spaceId == resource.data.spaceId
+         && request.resource.data.businessId == resource.data.businessId
+         && request.resource.data.createdAt == resource.data.createdAt
+         && request.resource.data.active == resource.data.active
+         && request.resource.data.pricingUnit == resource.data.pricingUnit
+         && request.resource.data.get('parentBusinessMarketplaceEligible', false) == resource.data.get('parentBusinessMarketplaceEligible', false)
+         && request.resource.data.basePricePaise == resource.data.basePricePaise
+         && request.resource.data.bookingType == resource.data.bookingType
+         && request.resource.data.category == resource.data.category
+         && request.resource.data.activityGroup == resource.data.activityGroup
+         && request.resource.data.activityType == resource.data.activityType
+         && request.resource.data.reviewedAt == resource.data.reviewedAt
+         && request.resource.data.approvedAt == resource.data.approvedAt
+         && request.resource.data.rejectionReason == resource.data.rejectionReason
+         && request.resource.data.submittedAt == resource.data.submittedAt
+         && request.resource.data.operationalStatus in ["ACTIVE", "INACTIVE", "MAINTENANCE", "CLOSED"]
+         && (resource.data.publishedAt == 0 ? request.resource.data.publishedAt > 0 : request.resource.data.publishedAt == resource.data.publishedAt)
+         && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.verificationStatus == "APPROVED"
+         && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.active == true
+         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["operationalStatus", "publishedAt", "updatedAt"])
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // Nested Resource Subcollection Security Rules (/spaces/{spaceId}/resources/{resourceId})
+    match /spaces/{spaceId}/resources/{resourceId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function ownsParentSpace() {
+        return signedIn() && parentSpace().data.ownerId == request.auth.uid;
+      }
+
+      allow get, list: if ownsParentSpace() || isAssignedManager(spaceId);
+
+      allow create: if (ownsParentSpace() || (isAssignedManager(spaceId) && managerHasPermission("MANAGE_RESOURCES")))
+        && request.resource.data.resourceId == resourceId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.businessId == parentSpace().data.businessId
+        && request.resource.data.status == "AVAILABLE"
+        && request.resource.data.active == true;
+
+      allow update: if (ownsParentSpace() || (isAssignedManager(spaceId) && managerHasPermission("MANAGE_RESOURCES")))
+        && request.resource.data.resourceId == resource.data.resourceId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.businessId == parentSpace().data.businessId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.active == resource.data.active
+        && request.resource.data.status in ["AVAILABLE", "MAINTENANCE", "BLOCKED"];
+
+      allow delete: if false;
+    }
+
+    // Nested Offering Subcollection Security Rules (/spaces/{spaceId}/offerings/{offeringId})
+    match /spaces/{spaceId}/offerings/{offeringId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function ownsParentSpace() {
+        return signedIn() && parentSpace().data.ownerId == request.auth.uid;
+      }
+
+      allow get, list: if ownsParentSpace() || isAssignedManager(spaceId);
+
+      allow create: if ownsParentSpace()
+        && request.resource.data.offeringId == offeringId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.businessId == parentSpace().data.businessId
+        && request.resource.data.status == "DRAFT"
+        && request.resource.data.active == true;
+
+      allow update: if ownsParentSpace()
+        && request.resource.data.offeringId == resource.data.offeringId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.businessId == parentSpace().data.businessId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.active == resource.data.active
+        && request.resource.data.status == resource.data.status
+        && resource.data.status == "DRAFT";
+
+      allow delete: if false;
+    }
+
+    // Nested Availability Rules Subcollection (/spaces/{spaceId}/resources/{resourceId}/availabilityRules/{ruleId})
+    match /spaces/{spaceId}/resources/{resourceId}/availabilityRules/{ruleId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function parentResource() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId)/resources/$(resourceId));
+      }
+
+      function canManageAvailabilityRules() {
+        return (signedIn() && parentSpace().data.ownerId == request.auth.uid && parentResource().data.ownerId == request.auth.uid)
+            || (isAssignedManager(spaceId) && managerHasPermission("MANAGE_AVAILABILITY"));
+      }
+
+      allow get, list: if canManageAvailabilityRules();
+
+      allow create, update: if canManageAvailabilityRules()
+        && request.resource.data.ruleId == ruleId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.resourceId == resourceId
+        && request.resource.data.ownerId == parentSpace().data.ownerId;
+
+      allow delete: if false;
+    }
+
+    // Nested Availability Blocks Subcollection (/spaces/{spaceId}/resources/{resourceId}/availabilityBlocks/{blockId})
+    match /spaces/{spaceId}/resources/{resourceId}/availabilityBlocks/{blockId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function parentResource() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId)/resources/$(resourceId));
+      }
+
+      function canManageAvailabilityBlocks() {
+        return (signedIn() && parentSpace().data.ownerId == request.auth.uid && parentResource().data.ownerId == request.auth.uid)
+            || (isAssignedManager(spaceId) && managerHasPermission("MANAGE_AVAILABILITY"));
+      }
+
+      allow get, list: if canManageAvailabilityBlocks();
+
+      allow create: if canManageAvailabilityBlocks()
+        && request.resource.data.blockId == blockId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.resourceId == resourceId
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.status == "ACTIVE";
+
+      allow update: if canManageAvailabilityBlocks()
+        && request.resource.data.blockId == resource.data.blockId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.resourceId == resource.data.resourceId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.status in ["ACTIVE", "CANCELLED"];
+
+      allow delete: if false;
+    }
+
+    // Direct V2 Space Availability Rules Subcollection (/spaces/{spaceId}/availabilityRules/{ruleId})
+    match /spaces/{spaceId}/availabilityRules/{ruleId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function canManageV2SpaceAvailability() {
+        return signedIn()
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.ownerId == request.auth.uid
+            && parentSpace().data.approvalStatus in ["DRAFT", "REJECTED", "APPROVED"];
+      }
+
+      function canManagerManageV2SpaceAvailability() {
+        return isAssignedManager(spaceId)
+            && managerHasPermission("MANAGE_AVAILABILITY")
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType in ["SLOT", "VENUE", "PRACTICE_ROOM"]
+            && parentSpace().data.approvalStatus == "APPROVED";
+      }
+
+      allow get, list: if (signedIn() && (parentSpace().data.ownerId == request.auth.uid || isAssignedManager(spaceId))) || isCustomerVisibleSpaceId(spaceId);
+
+      allow create: if (canManageV2SpaceAvailability() || canManagerManageV2SpaceAvailability())
+        && ruleId in ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+        && request.resource.data.ruleId == ruleId
+        && request.resource.data.dayOfWeek == ruleId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.resourceId == ""
+        && request.resource.data.ownerId == parentSpace().data.ownerId;
+
+      allow update: if (canManageV2SpaceAvailability() || canManagerManageV2SpaceAvailability())
+        && request.resource.data.ruleId == resource.data.ruleId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.resourceId == resource.data.resourceId
+        && request.resource.data.dayOfWeek == resource.data.dayOfWeek
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt >= resource.data.updatedAt;
+
+      allow delete: if false;
+    }
+
+    // Direct V2 Space Availability Blocks Subcollection (/spaces/{spaceId}/availabilityBlocks/{blockId})
+    match /spaces/{spaceId}/availabilityBlocks/{blockId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function canManageV2SpaceAvailability() {
+        return signedIn()
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.ownerId == request.auth.uid
+            && parentSpace().data.approvalStatus in ["DRAFT", "REJECTED", "APPROVED"];
+      }
+
+      function canManagerManageV2SpaceAvailability() {
+        return isAssignedManager(spaceId)
+            && managerHasPermission("MANAGE_AVAILABILITY")
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType in ["SLOT", "VENUE", "PRACTICE_ROOM"]
+            && parentSpace().data.approvalStatus == "APPROVED";
+      }
+
+      allow get, list: if (signedIn() && (parentSpace().data.ownerId == request.auth.uid || isAssignedManager(spaceId))) || isCustomerVisibleSpaceId(spaceId);
+
+      allow create: if (canManageV2SpaceAvailability() || canManagerManageV2SpaceAvailability())
+        && request.resource.data.blockId == blockId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.resourceId == ""
+        && request.resource.data.ownerId == parentSpace().data.ownerId
+        && request.resource.data.status == "ACTIVE"
+        && request.resource.data.startAt < request.resource.data.endAt;
+
+      allow update: if (canManageV2SpaceAvailability() || canManagerManageV2SpaceAvailability())
+        && request.resource.data.blockId == resource.data.blockId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.resourceId == resource.data.resourceId
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.status in ["ACTIVE", "CANCELLED"]
+        && request.resource.data.updatedAt >= resource.data.updatedAt;
+
+      allow delete: if false;
+    }
+
+    // V2 Space Seats Subcollection (/spaces/{spaceId}/seats/{seatId})
+    match /spaces/{spaceId}/seats/{seatId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function canManageV2Seats() {
+        return signedIn()
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType == "SEAT"
+            && parentSpace().data.ownerId == request.auth.uid
+            && parentSpace().data.approvalStatus in ["DRAFT", "REJECTED", "APPROVED"];
+      }
+
+      function canManagerManageV2Seats() {
+        return isAssignedManager(spaceId)
+            && managerHasPermission("MANAGE_SEATS")
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType == "SEAT"
+            && parentSpace().data.approvalStatus == "APPROVED";
+      }
+
+      allow get, list: if (signedIn() && (parentSpace().data.ownerId == request.auth.uid || isAssignedManager(spaceId))) || isCustomerVisibleSpaceId(spaceId);
+
+      allow create: if canManageV2Seats()
+        && request.resource.data.seatId == seatId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.status == "AVAILABLE"
+        && request.resource.data.active == true
+        && request.resource.data.capacity > 0
+        && request.resource.data.priceOverridePaise >= 0;
+
+      allow update: if (canManageV2Seats() || canManagerManageV2Seats())
+        && request.resource.data.seatId == resource.data.seatId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.capacity > 0
+        && request.resource.data.priceOverridePaise >= 0
+        && request.resource.data.status in ["AVAILABLE", "BLOCKED", "MAINTENANCE"];
+
+      allow delete: if false;
+    }
+
+    // V2 Space Workshop Sessions Subcollection (/spaces/{spaceId}/sessions/{sessionId})
+    match /spaces/{spaceId}/sessions/{sessionId} {
+      function parentSpace() {
+        return get(/databases/$(database)/documents/spaces/$(spaceId));
+      }
+
+      function canManageV2Sessions() {
+        return signedIn()
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType == "WORKSHOP"
+            && parentSpace().data.ownerId == request.auth.uid
+            && parentSpace().data.approvalStatus in ["DRAFT", "REJECTED", "APPROVED"];
+      }
+
+      function canManagerManageV2Sessions() {
+        return isAssignedManager(spaceId)
+            && managerHasPermission("MANAGE_SESSIONS")
+            && parentSpace().data.schemaVersion == 2
+            && parentSpace().data.bookingType == "WORKSHOP"
+            && parentSpace().data.approvalStatus == "APPROVED";
+      }
+
+      allow get, list: if (signedIn() && (parentSpace().data.ownerId == request.auth.uid || isAssignedManager(spaceId))) || isCustomerVisibleSpaceId(spaceId) || (isPublicMarketplaceSpaceForParent() && resource.data.active == true);
+
+      allow create: if canManageV2Sessions()
+        && request.resource.data.sessionId == sessionId
+        && request.resource.data.spaceId == spaceId
+        && request.resource.data.status == "SCHEDULED"
+        && request.resource.data.active == true
+        && request.resource.data.bookedCount == 0
+        && request.resource.data.startAt < request.resource.data.endAt
+        && request.resource.data.capacity > 0
+        && request.resource.data.priceOverridePaise >= 0;
+
+      allow update: if (canManageV2Sessions() || canManagerManageV2Sessions())
+        && request.resource.data.sessionId == resource.data.sessionId
+        && request.resource.data.spaceId == resource.data.spaceId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.bookedCount == resource.data.bookedCount
+        && request.resource.data.startAt < request.resource.data.endAt
+        && request.resource.data.capacity > 0
+        && request.resource.data.priceOverridePaise >= 0
+        && request.resource.data.status in ["SCHEDULED", "CANCELLED"];
+
+      allow delete: if false;
+    }
+
+    // V2 Customer Bookings Collection (/bookings/{bookingId})
+    match /bookings/{bookingId} {
+      allow get: if signedIn() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAssignedManager(resource.data.spaceId)
+      );
+
+      allow list: if signedIn() && request.query.limit <= 100 && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAssignedManager(resource.data.spaceId)
+      );
+
+      allow create: if isActiveCustomer()
+        && request.resource.data.bookingId == bookingId
+        && (request.resource.data.customerId == request.auth.uid || request.resource.data.userId == request.auth.uid)
+        && request.resource.data.schemaVersion == 2
+        && request.resource.data.status == "PENDING_PAYMENT"
+        && isCustomerVisibleSpaceId(request.resource.data.spaceId)
+        && request.resource.data.spaceId != ""
+        && request.resource.data.businessId != ""
+        && request.resource.data.ownerId != ""
+        && request.resource.data.totalAmountPaise >= 0
+        && request.resource.data.endAt >= request.resource.data.startAt;
+      
+      allow update: if isActiveCustomer()
+        && resource.data.customerId == request.auth.uid
+        && request.resource.data.customerId == resource.data.customerId
+        && resource.data.status == "PENDING_PAYMENT"
+        && resource.data.paymentStatus == "PENDING"
+        && request.resource.data.status == "CONFIRMED"
+        && request.resource.data.paymentStatus == "SUCCESSFUL"
+        && request.resource.data.updatedAt is int
+        && request.resource.data.updatedAt >= resource.data.updatedAt
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly([
+              "status",
+              "paymentStatus",
+              "updatedAt"
+            ]);
+
+      allow update: if signedIn() && isAssignedManager(resource.data.spaceId)
+        && managerHasPermission("CHECK_IN_OUT")
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "checkInTime", "checkOutTime", "updatedAt"])
+        && (
+          (
+            (resource.data.status == "CONFIRMED" || resource.data.status == "CHECK_IN_PENDING")
+            && request.resource.data.status == "CHECKED_IN"
+            && request.resource.data.paymentStatus == "SUCCESS"
+          ) ||
+          (
+            resource.data.status == "CHECKED_IN"
+            && request.resource.data.status == "COMPLETED"
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // Payment Attempts Collection (/payments/{paymentId})
+    match /payments/{paymentId} {
+      allow get: if signedIn() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAssignedManager(resource.data.spaceId)
+      );
+
+      allow list: if signedIn() && request.query.limit <= 100 && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.ownerId == request.auth.uid ||
+        isAssignedManager(resource.data.spaceId)
+      );
+
+      allow create: if isActiveCustomer()
+        && request.resource.data.paymentId == paymentId
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == "PENDING"
+        && request.resource.data.amountPaise >= 0
+        && request.resource.data.mode in ["DEMO", "TEST", "LIVE"]
+        && request.resource.data.spaceId != ""
+        && request.resource.data.bookingId != "";
+
+      allow update, delete: if false;
+    }
+
+    // Default deny for all other collections until explicitly implemented in future steps
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

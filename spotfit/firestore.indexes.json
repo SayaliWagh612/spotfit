@@ -1,0 +1,18 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "spaces",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "activityGroup", "order": "ASCENDING" },
+        { "fieldPath": "approvalStatus", "order": "ASCENDING" },
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "operationalStatus", "order": "ASCENDING" },
+        { "fieldPath": "parentBusinessMarketplaceEligible", "order": "ASCENDING" },
+        { "fieldPath": "schemaVersion", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

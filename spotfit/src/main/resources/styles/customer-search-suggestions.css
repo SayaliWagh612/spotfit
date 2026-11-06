@@ -1,0 +1,90 @@
+/* SpotFit Customer Search Suggestions */
+
+#spotfit-search-suggestions {
+    -fx-background-color: #FFFBF7;
+    -fx-background-radius: 16px;
+    -fx-border-color: #D8B99A;
+    -fx-border-width: 1px;
+    -fx-border-radius: 16px;
+    -fx-padding: 8px;
+    -fx-effect: dropshadow(gaussian,
+            rgba(59, 36, 23, 0.20),
+            24,
+            0.18,
+            0,
+            8);
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-item {
+    -fx-background-color: transparent;
+    -fx-background-radius: 11px;
+    -fx-padding: 5px 7px;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-item:focused {
+    -fx-background-color: #F5E2D0;
+    -fx-background-radius: 11px;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-content {
+    -fx-padding: 2px 5px;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-icon-container {
+    -fx-background-color: #FCE9D8;
+    -fx-background-radius: 10px;
+    -fx-border-color: #EDD9C3;
+    -fx-border-width: 1px;
+    -fx-border-radius: 10px;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-icon {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #A8571F;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-title {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #3B2417;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-type {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 11px;
+    -fx-text-fill: #8A7565;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-prototype {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 9px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #8A4718;
+    -fx-background-color: #F5E2D0;
+    -fx-background-radius: 10px;
+    -fx-border-color: #D8B99A;
+    -fx-border-radius: 10px;
+    -fx-padding: 4px 8px;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-arrow {
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #A8571F;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-item:focused .spotfit-suggestion-title {
+    -fx-text-fill: #3B2417;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-item:focused .spotfit-suggestion-type {
+    -fx-text-fill: #8A7565;
+}
+
+#spotfit-search-suggestions .spotfit-suggestion-item:focused .spotfit-suggestion-arrow {
+    -fx-text-fill: #8A4718;
+}
